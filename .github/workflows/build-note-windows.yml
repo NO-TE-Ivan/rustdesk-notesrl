@@ -1,5 +1,5 @@
-# Derived from RustDesk 1.5.0 official workflows. Manual Windows x64 build.
-name: Compila RustDesk NO.TE - Windows x64
+# NO.TE client: incoming only; server settings embedded and locked; installation enabled.
+name: Compila RustDesk NO.TE - Client solo ingresso
 'on':
   workflow_dispatch: {}
 permissions:
@@ -162,7 +162,7 @@ jobs:
         repository: rustdesk/rustdesk
         ref: fada664df7a294d1d1a9ca3e7cd3637069122f17
         persist-credentials: false
-    - name: Incorpora server e chiave NO.TE
+    - name: Incorpora server, chiave e modalita solo ingresso
       shell: python
       run: |
         import os, re, json, base64
@@ -185,6 +185,19 @@ jobs:
             new += '    settings.insert(' + json.dumps(k) + '.to_owned(), ' + json.dumps(v) + '.to_owned());\n'
         new += '    settings\n});'
         s = s.replace(old, new)
+
+        old_hard = 'pub static ref HARD_SETTINGS: RwLock<HashMap<String, String>> = Default::default();'
+        assert s.count(old_hard) == 1, 'HARD_SETTINGS non trovata'
+        hard = {'conn-type': 'incoming', 'disable-settings': 'Y', 'disable-account': 'Y', 'disable-ab': 'Y'}
+        new_hard = 'pub static ref HARD_SETTINGS: RwLock<HashMap<String, String>> = RwLock::new({\n    let mut settings = HashMap::new();\n'
+        for k, v in hard.items():
+            new_hard += '    settings.insert(' + json.dumps(k) + '.to_owned(), ' + json.dumps(v) + '.to_owned());\n'
+        new_hard += '    settings\n});'
+        s = s.replace(old_hard, new_hard)
+        old_override = 'pub static ref OVERWRITE_SETTINGS: RwLock<HashMap<String, String>> = Default::default();'
+        assert s.count(old_override) == 1, 'OVERWRITE_SETTINGS non trovata'
+        s = s.replace(old_override, new.replace('DEFAULT_SETTINGS:', 'OVERWRITE_SETTINGS:'))
+
         p.write_text(s, encoding='utf-8')
         print('DNS e chiave incorporati nei sorgenti:', host)
     - name: Restore bridge files
@@ -326,7 +339,7 @@ jobs:
     - name: Carica EXE personalizzato
       uses: actions/upload-artifact@v4
       with:
-        name: RustDesk-NOTE-1.5.0-Windows-x64
+        name: RustDesk-NOTE-1.5.0-Client-solo-ingresso-x64
         path: SignOutput/*.exe
         if-no-files-found: error
         retention-days: 30
