@@ -1,4 +1,4 @@
-# NO.TE client: incoming only; server settings embedded and locked; installation enabled.
+# v3: retry download vcpkg/Cargo; stop immediately if compilation fails.
 name: Compila RustDesk NO.TE - Client solo ingresso
 'on':
   workflow_dispatch: {}
@@ -252,26 +252,37 @@ jobs:
       env:
         VCPKG_DEFAULT_HOST_TRIPLET: ${{ matrix.job.vcpkg-triplet }}
       run: |
-        if ! $VCPKG_ROOT/vcpkg \
-          install \
-          --triplet ${{ matrix.job.vcpkg-triplet }} \
-          --x-install-root="$VCPKG_ROOT/installed"; then
-          find "${VCPKG_ROOT}/" -name "*.log" | while read -r _1; do
-            echo "$_1:"
-            echo "======"
-            cat "$_1"
-            echo "======"
-            echo ""
-          done
-          exit 1
-        fi
-        head -n 100 "${VCPKG_ROOT}/buildtrees/ffmpeg/build-${{ matrix.job.vcpkg-triplet }}-rel-out.log" || true
+        for attempt in 1 2 3 4; do
+          echo "Download e installazione dipendenze vcpkg: tentativo $attempt/4"
+          if "$VCPKG_ROOT/vcpkg" install --triplet x64-windows-static --x-install-root="$VCPKG_ROOT/installed"; then
+            exit 0
+          fi
+          if [ "$attempt" -lt 4 ]; then
+            sleep 15
+          fi
+        done
+        find "$VCPKG_ROOT/buildtrees/aom" -name '*err.log' -exec tail -n 60 {} \; || true
+        exit 1
       shell: bash
+    - name: Scarica dipendenze Rust con tentativi automatici
+      shell: bash
+      run: |
+        for attempt in 1 2 3 4; do
+          echo "Download dipendenze Rust: tentativo $attempt/4"
+          if cargo fetch --locked --target x86_64-pc-windows-msvc; then
+            exit 0
+          fi
+          if [ "$attempt" -lt 4 ]; then
+            sleep 15
+          fi
+        done
+        exit 1
     - name: Build rustdesk
       run: |
         # Windows: build RustDesk
         # --hwcodec is shared by all Windows targets; per-target extras (e.g. --vram) come from the matrix
         python3 .\build.py --portable --flutter --skip-portable-pack --hwcodec ${{ matrix.job.build-args }}
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         mv ./flutter/build/windows/${{ matrix.job.flutter-arch }}/runner/Release ./rustdesk
 
         # Download usbmmidd_v2.zip and extract it to ./rustdesk
