@@ -1,0 +1,306 @@
+# macOS Intel + Apple Silicon; incoming only; ad hoc signature, no Apple notarization.
+name: Compila RustDesk NO.TE - Teleassistenza1 - macOS
+'on':
+  workflow_dispatch: {}
+permissions:
+  contents: read
+env:
+  SCITER_RUST_VERSION: '1.75'
+  RUST_VERSION: '1.75'
+  MAC_RUST_VERSION: '1.81'
+  CARGO_NDK_VERSION: 3.1.2
+  SCITER_ARMV7_CMAKE_VERSION: 3.29.7
+  SCITER_NASM_DEBVERSION: 2.15.05-1
+  LLVM_VERSION: 15.0.6
+  FLUTTER_VERSION: 3.24.5
+  ANDROID_FLUTTER_VERSION: 3.24.5
+  FLUTTER_WINDOWS_ARM_VERSION: 3.44.9
+  FLUTTER_ELINUX_VERSION: 3.16.9
+  VCPKG_BINARY_SOURCES: clear;x-gha,readwrite
+  VCPKG_COMMIT_ID: 9e593bb18ea69cc5095e012465dcd675a822ed0d
+  VCPKG_CMAKE_VERSION: 4.3.0
+  ARMV7_VCPKG_COMMIT_ID: 6f29f12e82a8293156836ad81cc9bf5af41fe836
+  VERSION: 1.5.0
+  NDK_VERSION: r28c
+  CARGO_EXPAND_VERSION: 1.0.95
+  FLUTTER_RUST_BRIDGE_VERSION: 1.80.1
+  UPLOAD_ARTIFACT: 'true'
+  RENDEZVOUS_SERVER: teleassistenza1.notesolution.it
+  RS_PUB_KEY: ${{ vars.RS_PUB_KEY }}
+jobs:
+  bridge:
+    runs-on: ${{ matrix.job.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        job:
+        - target: x86_64-unknown-linux-gnu
+          os: ubuntu-22.04
+          extra-build-args: ''
+          flutter-version: 3.22.3
+          artifact-name: bridge-artifact
+    steps:
+    - name: Checkout source code
+      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      with:
+        submodules: recursive
+        repository: rustdesk/rustdesk
+        ref: fada664df7a294d1d1a9ca3e7cd3637069122f17
+        persist-credentials: false
+    - name: Install prerequisites
+      run: |
+        sudo apt-get install ca-certificates -y
+        sudo apt-get update -y
+        sudo apt-get install -y \
+          clang \
+          cmake \
+          curl \
+          gcc \
+          git \
+          g++ \
+          libclang-dev \
+          libgtk-3-dev \
+          llvm-dev \
+          nasm \
+          ninja-build \
+          pkg-config \
+          wget
+    - name: Install Rust toolchain
+      uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9
+      with:
+        toolchain: ${{ env.RUST_VERSION }}
+        targets: ${{ matrix.job.target }}
+        components: rustfmt
+    - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
+      with:
+        prefix-key: bridge-${{ matrix.job.os }}
+    - name: Install flutter
+      uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2
+      with:
+        channel: stable
+        flutter-version: ${{ matrix.job.flutter-version }}
+        cache: true
+    - name: Install flutter rust bridge deps
+      shell: bash
+      run: |
+        cargo install cargo-expand --version ${{ env.CARGO_EXPAND_VERSION }} --locked
+        cargo install flutter_rust_bridge_codegen --version ${{ env.FLUTTER_RUST_BRIDGE_VERSION }} --features "uuid" --locked
+        if [[ "${{ matrix.job.flutter-version }}" == "3.22.3" ]]; then
+          # Default Flutter 3.22.3: extended_text 14 needs a newer Dart, so downgrade for resolution.
+          sed -i -e 's/extended_text: 14.0.0/extended_text: 13.0.0/g' flutter/pubspec.yaml
+        else
+          # Flutter 3.44 bridge for Windows arm64: match that build's source/pubspec state so the
+          # generated *.freezed.dart compiles against the same Flutter/freezed it resolves.
+          bash .github/patches/apply_flutter_3.44_source_patches.sh
+        fi
+        pushd flutter && flutter pub get && popd
+    - name: Run flutter rust bridge
+      run: |
+        ~/.cargo/bin/flutter_rust_bridge_codegen --rust-input ./src/flutter_ffi.rs --dart-output ./flutter/lib/generated_bridge.dart --c-output ./flutter/macos/Runner/bridge_generated.h
+        cp ./flutter/macos/Runner/bridge_generated.h ./flutter/ios/Runner/bridge_generated.h
+    - name: Upload Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ matrix.job.artifact-name }}
+        path: |
+          ./src/bridge_generated.rs
+          ./src/bridge_generated.io.rs
+          ./flutter/lib/generated_bridge.dart
+          ./flutter/lib/generated_bridge.freezed.dart
+          ./flutter/macos/Runner/bridge_generated.h
+          ./flutter/ios/Runner/bridge_generated.h
+  macos:
+    name: ${{ matrix.job.target }}
+    runs-on: ${{ matrix.job.os }}
+    needs:
+    - bridge
+    strategy:
+      fail-fast: false
+      matrix:
+        job:
+        - target: x86_64-apple-darwin
+          os: macos-15-intel
+          extra-build-args: ''
+          arch: x86_64
+          vcpkg-triplet: x64-osx
+        - target: aarch64-apple-darwin
+          os: macos-14
+          extra-build-args: --screencapturekit
+          arch: aarch64
+          vcpkg-triplet: arm64-osx
+    steps:
+    - name: Export GitHub Actions cache environment variables
+      uses: actions/github-script@d7906e4ad0b1822421a7e6a35d5ca353c962f410
+      with:
+        script: |
+          core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
+          core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
+    - name: Checkout source code
+      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      with:
+        submodules: recursive
+        repository: rustdesk/rustdesk
+        ref: fada664df7a294d1d1a9ca3e7cd3637069122f17
+        persist-credentials: false
+    - name: Incorpora server, chiave e modalita solo ingresso
+      shell: python3 {0}
+      run: |
+        import os, re, json, base64
+        from pathlib import Path
+        host = os.environ['RENDEZVOUS_SERVER'].strip()
+        key = os.environ['RS_PUB_KEY'].strip()
+        assert re.fullmatch(r'[A-Za-z0-9.-]+', host), 'RENDEZVOUS_SERVER mancante o non valido'
+        assert len(base64.b64decode(key, validate=True)) == 32, 'RS_PUB_KEY non valida'
+        p = Path('libs/hbb_common/src/config.rs')
+        s = p.read_text(encoding='utf-8')
+        s, n = re.subn(r'pub const RENDEZVOUS_SERVERS: &\[&str\] = &\[[^;]+;', 'pub const RENDEZVOUS_SERVERS: &[&str] = &[' + json.dumps(host) + '];', s)
+        assert n == 1, 'Costante server non trovata'
+        s, n = re.subn(r'pub const RS_PUB_KEY: &str = "[^"]*";', 'pub const RS_PUB_KEY: &str = ' + json.dumps(key) + ';', s)
+        assert n == 1, 'Costante chiave non trovata'
+        old = 'pub static ref DEFAULT_SETTINGS: RwLock<HashMap<String, String>> = Default::default();'
+        assert s.count(old) == 1, 'DEFAULT_SETTINGS non trovata'
+        entries = {'custom-rendezvous-server': host, 'key': key}
+        new = 'pub static ref DEFAULT_SETTINGS: RwLock<HashMap<String, String>> = RwLock::new({\n    let mut settings = HashMap::new();\n'
+        for k, v in entries.items():
+            new += '    settings.insert(' + json.dumps(k) + '.to_owned(), ' + json.dumps(v) + '.to_owned());\n'
+        new += '    settings\n});'
+        s = s.replace(old, new)
+
+        old_hard = 'pub static ref HARD_SETTINGS: RwLock<HashMap<String, String>> = Default::default();'
+        assert s.count(old_hard) == 1, 'HARD_SETTINGS non trovata'
+        hard = {'conn-type': 'incoming', 'disable-settings': 'Y', 'disable-account': 'Y', 'disable-ab': 'Y'}
+        new_hard = 'pub static ref HARD_SETTINGS: RwLock<HashMap<String, String>> = RwLock::new({\n    let mut settings = HashMap::new();\n'
+        for k, v in hard.items():
+            new_hard += '    settings.insert(' + json.dumps(k) + '.to_owned(), ' + json.dumps(v) + '.to_owned());\n'
+        new_hard += '    settings\n});'
+        s = s.replace(old_hard, new_hard)
+        old_override = 'pub static ref OVERWRITE_SETTINGS: RwLock<HashMap<String, String>> = Default::default();'
+        assert s.count(old_override) == 1, 'OVERWRITE_SETTINGS non trovata'
+        s = s.replace(old_override, new.replace('DEFAULT_SETTINGS:', 'OVERWRITE_SETTINGS:'))
+
+        p.write_text(s, encoding='utf-8')
+        print('DNS e chiave incorporati nei sorgenti:', host)
+    - name: Install build runtime
+      run: |
+        brew install llvm create-dmg
+        # pkg-config is handled in a separate step, because it may be already installed by `macos-latest`(14.7.1) runner
+        if command -v pkg-config &>/dev/null; then
+            echo "pkg-config is already installed"
+        else
+            brew install pkg-config
+        fi
+    - name: Install NASM
+      run: |
+        # Install NASM 2.16.x from official release.
+        # Do NOT use `brew install nasm` which installs NASM 3.x.
+        # NASM 3.x is a complete rewrite with incompatible CLI options and removed features.
+        # aom and other multimedia libraries require NASM 2.x for x86/x86_64 assembly.
+        wget https://www.nasm.us/pub/nasm/releasebuilds/2.16.03/macosx/nasm-2.16.03-macosx.zip
+        unzip nasm-2.16.03-macosx.zip
+        sudo cp nasm-2.16.03/nasm /usr/local/bin/nasm
+        nasm --version
+    - name: Install flutter
+      uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2
+      with:
+        channel: stable
+        flutter-version: ${{ env.FLUTTER_VERSION }}
+    - name: Patch flutter
+      run: |
+        cd $(dirname $(dirname $(which flutter)))
+        if [[ "3.24.5" == ${{env.FLUTTER_VERSION}} ]]; then
+          git apply ${{ github.workspace }}/.github/patches/flutter_3.24.4_dropdown_menu_enableFilter.diff
+        fi
+    - name: Workaround for flutter issue
+      shell: python3 {0}
+      run: |
+        import pathlib, shutil
+        p = pathlib.Path(shutil.which('flutter')).resolve().parent.parent / 'packages/flutter/lib/src/scheduler/binding.dart'
+        s = p.read_text()
+        p.write_text(s.replace('_setFramesEnabledState(false);', '//_setFramesEnabledState(false);'))
+    - name: Install Rust toolchain
+      uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9
+      with:
+        toolchain: ${{ env.MAC_RUST_VERSION }}
+        targets: ${{ matrix.job.target }}
+        components: rustfmt
+    - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
+      with:
+        prefix-key: ${{ matrix.job.os }}
+    - name: Restore bridge files
+      uses: actions/download-artifact@v4
+      with:
+        name: bridge-artifact
+        path: ./
+    - name: Setup vcpkg with Github Actions binary cache
+      uses: lukka/run-vcpkg@b1a0dd252f06b9e25b3c022a9a03bd7a427fb6a2
+      with:
+        vcpkgGitCommitId: ${{ env.VCPKG_COMMIT_ID }}
+        doNotCache: false
+    - name: Install vcpkg dependencies
+      run: |
+        for attempt in 1 2 3 4; do
+          echo "Dipendenze vcpkg: tentativo $attempt/4"
+          if "$VCPKG_ROOT/vcpkg" install --triplet "${{ matrix.job.vcpkg-triplet }}" --x-install-root="$VCPKG_ROOT/installed"; then
+            exit 0
+          fi
+          if [ "$attempt" -lt 4 ]; then sleep 15; fi
+        done
+        exit 1
+      shell: bash
+      env:
+        VCPKG_DEFAULT_TRIPLET: ${{ matrix.job.vcpkg-triplet }}
+        VCPKG_DEFAULT_HOST_TRIPLET: ${{ matrix.job.vcpkg-triplet }}
+    - name: Show version information (Rust, cargo, Clang)
+      shell: bash
+      run: |
+        clang --version || true
+        rustup -V
+        rustup toolchain list
+        rustup default
+        cargo -V
+        rustc -V
+    - name: Scarica dipendenze Rust con tentativi automatici
+      shell: bash
+      run: |
+        for attempt in 1 2 3 4; do
+          echo "Download dipendenze Rust: tentativo $attempt/4"
+          if cargo fetch --locked --target ${{ matrix.job.target }}; then
+            exit 0
+          fi
+          if [ "$attempt" -lt 4 ]; then
+            sleep 15
+          fi
+        done
+        exit 1
+    - name: Build rustdesk
+      run: |
+        if [ "${{ matrix.job.target }}" = "aarch64-apple-darwin" ]; then
+          MIN_MACOS_VERSION="12.3"
+          sed -i -e "s/MACOSX_DEPLOYMENT_TARGET\=[0-9]*.[0-9]*/MACOSX_DEPLOYMENT_TARGET=${MIN_MACOS_VERSION}/" build.py
+          sed -i -e "s/platform :osx, '.*'/platform :osx, '${MIN_MACOS_VERSION}'/" flutter/macos/Podfile
+          sed -i -e "s/osx_minimum_system_version = \"[0-9]*.[0-9]*\"/osx_minimum_system_version = \"${MIN_MACOS_VERSION}\"/" Cargo.toml
+          sed -i -e "s/MACOSX_DEPLOYMENT_TARGET = [0-9]*.[0-9]*;/MACOSX_DEPLOYMENT_TARGET = ${MIN_MACOS_VERSION};/" flutter/macos/Runner.xcodeproj/project.pbxproj
+        fi
+        python3 ./build.py --flutter --hwcodec --unix-file-copy-paste ${{ matrix.job.extra-build-args }}
+    - name: Firma locale ad hoc e verifica app
+      shell: bash
+      run: |
+        bash .github/scripts/sign-macos-app.sh \
+          ./flutter/build/macos/Build/Products/Release/RustDesk.app \
+          - ./flutter/macos/Runner/Release.entitlements
+    - name: Crea DMG NO.TE
+      shell: bash
+      run: |
+        mkdir -p note-dmg
+         ditto ./flutter/build/macos/Build/Products/Release/RustDesk.app ./note-dmg/RustDesk.app
+        ln -s /Applications ./note-dmg/Applications
+        hdiutil create -volname "NO.TE Teleassistenza1" -srcfolder ./note-dmg -ov -format UDZO "rustdesk-teleassistenza1-${{ env.VERSION }}-macos-${{ matrix.job.arch }}.dmg"
+        hdiutil verify "rustdesk-teleassistenza1-${{ env.VERSION }}-macos-${{ matrix.job.arch }}.dmg"
+    - name: Carica pacchetto macOS
+      uses: actions/upload-artifact@v4
+      with:
+        name: RustDesk-NOTE-Teleassistenza1-macOS-${{ matrix.job.arch }}
+        path: rustdesk-teleassistenza1-${{ env.VERSION }}-macos-${{ matrix.job.arch }}.dmg
+        if-no-files-found: error
+        retention-days: 30
+    timeout-minutes: 180
