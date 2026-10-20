@@ -358,7 +358,7 @@ jobs:
         python3 ./generate.py -f ../../rustdesk/ -o . -e ../../rustdesk/rustdesk.exe
         popd
         mkdir -p ./SignOutput
-        mv ./target/release/rustdesk-portable-packer.exe ./SignOutput/rustdesk-teleassistenza2-${{ env.VERSION }}-${{ matrix.job.arch }}.exe
+        mv ./target/release/rustdesk-portable-packer.exe "./SignOutput/NO.TE Teleassistenza.exe"
     - name: Carica EXE personalizzato
       uses: actions/upload-artifact@v4
       with:
