@@ -1,5 +1,5 @@
 # NO.TE branding. Requires note-branding/ in this repository.
-name: NO.TE BRAND - Teleassistenza1 - macos
+name: NO.TE BRAND V3 - Teleassistenza1 - macOS
 'on':
   workflow_dispatch: {}
 permissions:
@@ -151,9 +151,11 @@ jobs:
         sparse-checkout: note-branding
         persist-credentials: false
     - name: Prepara conversione icone
-      run: python3 -m pip install Pillow==12.0.0
+      run: |
+        python3 -m venv "$RUNNER_TEMP/note-branding-venv"
+        "$RUNNER_TEMP/note-branding-venv/bin/python" -m pip install Pillow==12.0.0
     - name: Applica logo, titolo e colori NO.TE
-      run: python3 _note_branding/note-branding/apply-branding.py
+      run: '"$RUNNER_TEMP/note-branding-venv/bin/python" _note_branding/note-branding/apply-macos-branding.py'
     - name: Incorpora server, chiave e modalita solo ingresso
       shell: python3 {0}
       run: |
@@ -306,13 +308,13 @@ jobs:
         mkdir -p note-dmg
          ditto ./flutter/build/macos/Build/Products/Release/RustDesk.app ./note-dmg/RustDesk.app
         ln -s /Applications ./note-dmg/Applications
-        hdiutil create -volname "NO.TE Teleassistenza1" -srcfolder ./note-dmg -ov -format UDZO "rustdesk-teleassistenza1-${{ env.VERSION }}-macos-${{ matrix.job.arch }}.dmg"
-        hdiutil verify "rustdesk-teleassistenza1-${{ env.VERSION }}-macos-${{ matrix.job.arch }}.dmg"
+        hdiutil create -volname "NO.TE Teleassistenza1" -srcfolder ./note-dmg -ov -format UDZO "NOTE-Teleassistenza1-${{ env.VERSION }}-macos-${{ matrix.job.arch }}.dmg"
+        hdiutil verify "NOTE-Teleassistenza1-${{ env.VERSION }}-macos-${{ matrix.job.arch }}.dmg"
     - name: Carica pacchetto macOS
       uses: actions/upload-artifact@v4
       with:
-        name: NOTE-BRAND-Teleassistenza1-macos-${{ matrix.job.arch }}
-        path: rustdesk-teleassistenza1-${{ env.VERSION }}-macos-${{ matrix.job.arch }}.dmg
+        name: NOTE-BRAND-V3-Teleassistenza1-macos-${{ matrix.job.arch }}
+        path: NOTE-Teleassistenza1-${{ env.VERSION }}-macos-${{ matrix.job.arch }}.dmg
         if-no-files-found: error
         retention-days: 30
     timeout-minutes: 180
