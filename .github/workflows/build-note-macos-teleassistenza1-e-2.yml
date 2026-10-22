@@ -1,5 +1,5 @@
 # NO.TE branding. Requires note-branding/ in this repository.
-name: NO.TE V3 - macOS Intel e Apple Silicon - Teleassistenza1 e 2 - Password permanente
+name: NO.TE V3 - macOS - NOME E AVVIO - Teleassistenza1 e 2
 'on':
   workflow_dispatch: {}
 permissions:
@@ -158,6 +158,53 @@ jobs:
         "$RUNNER_TEMP/note-branding-venv/bin/python" -m pip install Pillow==12.0.0
     - name: Applica logo, titolo e colori NO.TE
       run: '"$RUNNER_TEMP/note-branding-venv/bin/python" _note_branding/note-branding/apply-macos-branding.py'
+    - name: Completa nome macOS e percorsi del servizio
+      shell: python3 {0}
+      run: |
+        from pathlib import Path
+        import re
+
+        def patch(rel, old, new, count=1):
+            p=Path(rel);s=p.read_text(encoding='utf-8')
+            assert s.count(old)==count, f'{rel}: expected {count} occurrences, got {s.count(old)}: {old!r}'
+            p.write_text(s.replace(old,new),encoding='utf-8')
+
+        # Keep the native executable/config/service identifiers, while changing the bundle path.
+        rel='src/platform/macos.rs'
+        patch(rel,'format!("/Applications/{}.app", crate::get_app_name())','String::from("/Applications/NO.TE Teleassistenza.app")',2)
+        patch(rel,'format!("/Applications/{}.app", app_name)','String::from("/Applications/NO.TE Teleassistenza.app")',2)
+        patch(rel,'set app_bundle to "/Applications/" & app_name & ".app"','set app_bundle to "/Applications/NO.TE Teleassistenza.app"')
+        patch(rel,'format!("{}/{}.app", tmp_dir, app_name)','format!("{}/NO.TE Teleassistenza.app", tmp_dir)')
+        patch(rel,'let app_name = format!("{}.app", crate::get_app_name());','let app_name = String::from("NO.TE Teleassistenza.app");')
+        patch(rel,'"{}/{}.app/Contents/MacOS/{}",\n        target_dir, app_name, app_name','"{}/NO.TE Teleassistenza.app/Contents/MacOS/{}",\n        target_dir, app_name')
+        patch(rel,'/Applications/{app_name}.app/','/Applications/NO.TE Teleassistenza.app/',6)
+        patch(rel,'    /Applications/NO.TE Teleassistenza.app/Contents/MacOS/service --write-plists', '    "/Applications/NO.TE Teleassistenza.app/Contents/MacOS/service" --write-plists')
+        # The upstream update script assumes a bundle name without spaces. Quote every unquoted path.
+        p=Path(rel);s=p.read_text()
+        a=s.index('    let script = format!(\n        r#"#!/bin/sh\nrollback_done=0')
+        b=s.index('\n"#,',a)
+        script=s[a:b]
+        script=script.replace('ditto {src_app} ', 'ditto "{src_app}" ')
+        script,n=re.subn(r'(?<!["\w])\{app_bundle\}((?:/[A-Za-z0-9_/{\}.-]+|\.bak)?)(?=[ ;]|$)',r'"{app_bundle}\1"',script,flags=re.M)
+        assert n==16, f'Unexpected update path count: {n}'
+        s=s[:a]+script+s[b:];p.write_text(s)
+        # IPC must validate the actual installed path, without weakening process authentication.
+        patch('src/ipc.rs','format!("/Applications/{}.app", crate::get_app_name())','String::from("/Applications/NO.TE Teleassistenza.app")')
+        patch('src/ipc/auth.rs','"/Applications/{}.app/Contents/MacOS/{}",\n        crate::get_app_name(),\n        crate::get_app_name()', '"/Applications/NO.TE Teleassistenza.app/Contents/MacOS/{}",\n        crate::get_app_name()')
+        for name in ('agent.plist','daemon.plist','update.scpt'):
+            p=Path('src/platform/privileges_scripts')/name;s=p.read_text()
+            assert '/Applications/RustDesk.app' in s
+            p.write_text(s.replace('/Applications/RustDesk.app','/Applications/NO.TE Teleassistenza.app'))
+        patch('src/platform/privileges_scripts/daemon.plist', '<string>/Applications/NO.TE Teleassistenza.app/Contents/MacOS/service</string>', '<string>"/Applications/NO.TE Teleassistenza.app/Contents/MacOS/service"</string>')
+        for name in ('install.scpt','uninstall.scpt','update.scpt'):
+            p=Path('src/platform/privileges_scripts')/name;s=p.read_text()
+            assert 'with prompt "RustDesk wants' in s
+            p.write_text(s.replace('with prompt "RustDesk wants','with prompt "NO.TE Teleassistenza wants'))
+        # Xcode's Swift module remains RustDesk; only the menu/window labels change.
+        p=Path('flutter/macos/Runner/Base.lproj/MainMenu.xib');s=p.read_text()
+        assert s.count('APP_NAME')==6
+        p.write_text(s.replace('APP_NAME','NO.TE Teleassistenza'))
+        print('Nome macOS e percorsi bundle/servizio/IPC aggiornati.')
     - name: Incorpora server, chiave e modalita solo ingresso
       shell: python3 {0}
       run: |
@@ -315,24 +362,73 @@ jobs:
           sed -i -e "s/MACOSX_DEPLOYMENT_TARGET = [0-9]*.[0-9]*;/MACOSX_DEPLOYMENT_TARGET = ${MIN_MACOS_VERSION};/" flutter/macos/Runner.xcodeproj/project.pbxproj
         fi
         python3 ./build.py --flutter --hwcodec --unix-file-copy-paste ${{ matrix.job.extra-build-args }}
+    - name: Prepara bundle NO.TE prima della firma
+      shell: python3 {0}
+      run: |
+        import plistlib
+        from pathlib import Path
+        release = Path('flutter/build/macos/Build/Products/Release')
+        app = release / 'RustDesk.app'
+        p = app / 'Contents/Info.plist'
+        with p.open('rb') as f:
+            info = plistlib.load(f)
+        assert (app / 'Contents/MacOS' / info['CFBundleExecutable']).is_file()
+        info['CFBundleDisplayName'] = 'NO.TE Teleassistenza'
+        info['CFBundleName'] = 'NO.TE Teleassistenza'
+        with p.open('wb') as f:
+            plistlib.dump(info, f, sort_keys=False)
+        target = release / 'NO.TE Teleassistenza.app'
+        assert not target.exists(), 'Bundle di destinazione gia esistente'
+        app.rename(target)
+    - name: Correggi caricamento librerie con firma ad hoc
+      shell: python3 {0}
+      run: |
+        import plistlib
+        from pathlib import Path
+        p = Path('flutter/macos/Runner/Release.entitlements')
+        with p.open('rb') as f:
+            entitlements = plistlib.load(f)
+        # Eccezione limitata a questa applicazione, necessaria alla firma ad hoc.
+        entitlements['com.apple.security.cs.disable-library-validation'] = True
+        with p.open('wb') as f:
+            plistlib.dump(entitlements, f, sort_keys=False)
     - name: Firma locale ad hoc e verifica app
       shell: bash
       run: |
         bash .github/scripts/sign-macos-app.sh \
-          ./flutter/build/macos/Build/Products/Release/RustDesk.app \
+          "./flutter/build/macos/Build/Products/Release/NO.TE Teleassistenza.app" \
           - ./flutter/macos/Runner/Release.entitlements
+    - name: Verifica eccezione librerie nella firma finale
+      shell: python3 {0}
+      run: |
+        import plistlib, subprocess
+        app = './flutter/build/macos/Build/Products/Release/NO.TE Teleassistenza.app'
+        result = subprocess.run(['codesign', '-d', '--entitlements', ':-', app], check=True, capture_output=True)
+        entitlements = plistlib.loads(result.stdout)
+        assert entitlements.get('com.apple.security.cs.disable-library-validation') is True, 'Eccezione librerie assente dalla firma finale'
+        assert entitlements.get('com.apple.security.device.audio-input') is True, 'Permesso audio mancante'
+        from pathlib import Path
+        with (Path(app) / 'Contents/Info.plist').open('rb') as f:
+            info = plistlib.load(f)
+        assert info['CFBundleName'] == 'NO.TE Teleassistenza'
+        assert info['CFBundleDisplayName'] == 'NO.TE Teleassistenza'
+        executable = Path(app) / 'Contents/MacOS' / info['CFBundleExecutable']
+        expected = 'arm64' if '${{ matrix.job.arch }}' == 'aarch64' else 'x86_64'
+        subprocess.run(['lipo', '-verify_arch', expected, str(executable)], check=True)
+        subprocess.run(['lipo', '-verify_arch', expected, str(Path(app) / 'Contents/Frameworks/FlutterMacOS.framework/Versions/A/FlutterMacOS')], check=True)
+        print('Firma, nome e architettura del bundle finale verificati: OK')
     - name: Crea DMG NO.TE
       shell: bash
       run: |
         mkdir -p note-dmg
-         ditto ./flutter/build/macos/Build/Products/Release/RustDesk.app ./note-dmg/RustDesk.app
+        ditto "./flutter/build/macos/Build/Products/Release/NO.TE Teleassistenza.app" "./note-dmg/NO.TE Teleassistenza.app"
         ln -s /Applications ./note-dmg/Applications
         hdiutil create -volname "NO.TE ${{ matrix.client }}" -srcfolder ./note-dmg -ov -format UDZO "NOTE-${{ matrix.client }}-${{ env.VERSION }}-macos-${{ matrix.job.arch }}.dmg"
         hdiutil verify "NOTE-${{ matrix.client }}-${{ env.VERSION }}-macos-${{ matrix.job.arch }}.dmg"
     - name: Carica pacchetto macOS
       uses: actions/upload-artifact@v4
       with:
-        name: NOTE-V3-PASSWORD-${{ matrix.client }}-macos-${{ matrix.job.arch }}
+        name: NOTE-V3-NOME-AVVIO-${{ matrix.client }}-macos-${{ matrix.job.arch }}
         path: NOTE-${{ matrix.client }}-${{ env.VERSION }}-macos-${{ matrix.job.arch }}.dmg
         if-no-files-found: error
         retention-days: 30
