@@ -414,8 +414,8 @@ jobs:
         assert info['CFBundleDisplayName'] == 'NO.TE Teleassistenza'
         executable = Path(app) / 'Contents/MacOS' / info['CFBundleExecutable']
         expected = 'arm64' if '${{ matrix.job.arch }}' == 'aarch64' else 'x86_64'
-        subprocess.run(['lipo', '-verify_arch', expected, str(executable)], check=True)
-        subprocess.run(['lipo', '-verify_arch', expected, str(Path(app) / 'Contents/Frameworks/FlutterMacOS.framework/Versions/A/FlutterMacOS')], check=True)
+        subprocess.run(['lipo', str(executable), '-verify_arch', expected], check=True)
+        subprocess.run(['lipo', str(Path(app) / 'Contents/Frameworks/FlutterMacOS.framework/Versions/A/FlutterMacOS'), '-verify_arch', expected], check=True)
         print('Firma, nome e architettura del bundle finale verificati: OK')
     - name: Crea DMG NO.TE
       shell: bash
