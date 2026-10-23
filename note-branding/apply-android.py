@@ -174,7 +174,7 @@ p = Path('flutter/lib/mobile/pages/settings_page.dart')
 s = p.read_text(encoding='utf-8')
 anchor = "import 'scan_page.dart';"
 assert s.count(anchor) == 1
-s = s.replace(anchor, anchor + "\nimport 'server_page.dart' show NoteSecurityAction;")
+s = s.replace(anchor, anchor + "\nimport 'server_page.dart' show NoteSecurityAction;\nimport '../../desktop/pages/desktop_home_page.dart' show setPasswordDialog;")
 anchor = '        SettingsSection(title: Text(translate("Settings")), tiles: ['
 assert s.count(anchor) == 1
 section = '''        if (isAndroid && !outgoingOnly)
