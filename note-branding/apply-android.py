@@ -21,7 +21,7 @@ s = s.replace(old, new)
 
 old_hard = 'pub static ref HARD_SETTINGS: RwLock<HashMap<String, String>> = Default::default();'
 assert s.count(old_hard) == 1, 'HARD_SETTINGS non trovata'
-hard = {'conn-type': 'incoming', 'disable-settings': 'Y', 'disable-account': 'Y', 'disable-ab': 'Y'}
+hard = {'conn-type': 'incoming', 'disable-account': 'Y', 'disable-ab': 'Y'}
 new_hard = 'pub static ref HARD_SETTINGS: RwLock<HashMap<String, String>> = RwLock::new({\n    let mut settings = HashMap::new();\n'
 for k, v in hard.items():
     new_hard += '    settings.insert(' + json.dumps(k) + '.to_owned(), ' + json.dumps(v) + '.to_owned());\n'
@@ -30,6 +30,10 @@ s = s.replace(old_hard, new_hard)
 old_override = 'pub static ref OVERWRITE_SETTINGS: RwLock<HashMap<String, String>> = Default::default();'
 assert s.count(old_override) == 1, 'OVERWRITE_SETTINGS non trovata'
 s = s.replace(old_override, new.replace('DEFAULT_SETTINGS:', 'OVERWRITE_SETTINGS:'))
+
+old_builtin = 'pub static ref BUILTIN_SETTINGS: RwLock<HashMap<String, String>> = Default::default();'
+assert s.count(old_builtin) == 1, 'BUILTIN_SETTINGS non trovata'
+s = s.replace(old_builtin, 'pub static ref BUILTIN_SETTINGS: RwLock<HashMap<String, String>> = RwLock::new({ let mut settings = HashMap::new(); settings.insert("hide-network-settings".to_owned(), "Y".to_owned()); settings });')
 
 p.write_text(s, encoding='utf-8')
 print('DNS e chiave incorporati nei sorgenti:', host)
@@ -81,3 +85,116 @@ client=os.environ['NOTE_CLIENT'].lower()
 assert client in ('teleassistenza1','teleassistenza2')
 patch('flutter/android/app/build.gradle','applicationId "com.carriez.flutter_hbb"','applicationId "it.notesolution.'+client+'"')
 print('Branding Android NO.TE applicato:',client)
+
+# NO.TE: explicit assistance consent, immediately actionable, without countdown.
+p = Path('flutter/lib/mobile/pages/server_page.dart')
+s = p.read_text(encoding='utf-8')
+start = s.index('class ScamWarningDialogState extends State<ScamWarningDialog> {')
+end = s.index('class ServerInfo extends StatelessWidget {', start)
+original = s[start:end]
+assert 'startCountdown();' in original and 'show-scam-warning' in original
+replacement = r'''class ScamWarningDialogState extends State<ScamWarningDialog> {
+  bool _dontShowAgain = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      backgroundColor: Colors.white,
+      title: const Text(
+        'Avvia teleassistenza NO.TE',
+        style: TextStyle(color: Color(0xFF202020), fontWeight: FontWeight.bold),
+      ),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Avviando la teleassistenza consenti al tecnico di vedere il tuo '
+              'schermo e, se autorizzato, controllare il dispositivo.\n\n'
+              'Procedi solo se hai richiesto assistenza a NO.TE Solution. '
+              'Se una persona sconosciuta ti ha chiesto di avviare questa app, '
+              'annulla e contatta NO.TE tramite i recapiti ufficiali.\n\n'
+              'Puoi interrompere la sessione in qualsiasi momento.',
+              style: TextStyle(color: Color(0xFF202020), fontSize: 16),
+            ),
+            const SizedBox(height: 16),
+            CheckboxListTile(
+              contentPadding: EdgeInsets.zero,
+              controlAffinity: ListTileControlAffinity.leading,
+              activeColor: const Color(0xFF454545),
+              checkColor: Colors.white,
+              title: const Text('Non visualizzare più',
+                  style: TextStyle(color: Color(0xFF202020))),
+              value: _dontShowAgain,
+              onChanged: (value) {
+                setState(() { _dontShowAgain = value ?? false; });
+              },
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          style: TextButton.styleFrom(foregroundColor: const Color(0xFF454545)),
+          onPressed: () { Navigator.of(context).pop(); },
+          child: const Text('Annulla'),
+        ),
+        ElevatedButton(
+          style: ElevatedButton.styleFrom(
+            backgroundColor: const Color(0xFF454545),
+            foregroundColor: Colors.white,
+          ),
+          onPressed: () {
+            if (_dontShowAgain) {
+              bind.mainSetLocalOption(key: 'show-scam-warning', value: 'N');
+            }
+            final serverModel = widget.serverModel;
+            Navigator.of(context).pop();
+            serverModel.toggleService();
+          },
+          child: const Text('Avvia assistenza'),
+        ),
+      ],
+    );
+  }
+}
+
+'''
+p.write_text(s[:start] + replacement + s[end:], encoding='utf-8')
+print('Conferma NO.TE applicata: avvio immediato senza timer, consenso mantenuto.')
+
+# Reuse the upstream password/authentication menu and dialog.
+p = Path('flutter/lib/mobile/pages/server_page.dart')
+s = p.read_text(encoding='utf-8')
+assert s.count('_DropDownAction') == 3
+s = s.replace('_DropDownAction', 'NoteSecurityAction')
+p.write_text(s, encoding='utf-8')
+p = Path('flutter/lib/mobile/pages/settings_page.dart')
+s = p.read_text(encoding='utf-8')
+anchor = "import 'scan_page.dart';"
+assert s.count(anchor) == 1
+s = s.replace(anchor, anchor + "\nimport 'server_page.dart' show NoteSecurityAction;")
+anchor = '        SettingsSection(title: Text(translate("Settings")), tiles: ['
+assert s.count(anchor) == 1
+section = '''        if (isAndroid && !outgoingOnly)
+          SettingsSection(
+            title: const Text('Sicurezza'),
+            tiles: [
+              SettingsTile(
+                title: const Text('Password permanente'),
+                leading: const Icon(Icons.lock_outline),
+                onPressed: (context) { setPasswordDialog(); },
+              ),
+              SettingsTile(
+                title: const Text('Modalità di autenticazione'),
+                description: const Text('Apri il menu a destra per scegliere password, conferma manuale o entrambe.'),
+                leading: const Icon(Icons.security),
+                trailing: NoteSecurityAction(),
+              ),
+            ],
+          ),
+'''
+s = s.replace(anchor, section + anchor)
+p.write_text(s, encoding='utf-8')
+print('Sicurezza Android abilitata; impostazioni di rete nascoste.')
